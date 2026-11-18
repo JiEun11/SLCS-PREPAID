@@ -1,0 +1,206 @@
+{
+  "id": "d7551402-bfa1-4be7-be9e-027698d97e1d",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.admins": {
+      "name": "admins",
+      "schema": "",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.customers": {
+      "name": "customers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "balance": {
+          "name": "balance",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "customers_balance_nonnegative": {
+          "name": "customers_balance_nonnegative",
+          "value": "\"customers\".\"balance\" >= 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.transactions": {
+      "name": "transactions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "transaction_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount": {
+          "name": "amount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reverses_id": {
+          "name": "reverses_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "transactions_customer_id_customers_id_fk": {
+          "name": "transactions_customer_id_customers_id_fk",
+          "tableFrom": "transactions",
+          "tableTo": "customers",
+          "columnsFrom": ["customer_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "transactions_customer_id_reverses_id_transactions_customer_id_id_fk": {
+          "name": "transactions_customer_id_reverses_id_transactions_customer_id_id_fk",
+          "tableFrom": "transactions",
+          "tableTo": "transactions",
+          "columnsFrom": ["customer_id", "reverses_id"],
+          "columnsTo": ["customer_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "transactions_actor_idempotency_key": {
+          "name": "transactions_actor_idempotency_key",
+          "nullsNotDistinct": false,
+          "columns": ["actor_id", "idempotency_key"]
+        },
+        "transactions_customer_id_and_id": {
+          "name": "transactions_customer_id_and_id",
+          "nullsNotDistinct": false,
+          "columns": ["customer_id", "id"]
+        },
+        "transactions_single_reversal": {
+          "name": "transactions_single_reversal",
+          "nullsNotDistinct": false,
+          "columns": ["reverses_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "transactions_kind_amount_and_reversal": {
+          "name": "transactions_kind_amount_and_reversal",
+          "value": "\n    (\"transactions\".\"kind\" = 'credit' AND \"transactions\".\"amount\" > 0 AND \"transactions\".\"reverses_id\" IS NULL)\n    OR (\"transactions\".\"kind\" = 'debit' AND \"transactions\".\"amount\" < 0 AND \"transactions\".\"reverses_id\" IS NULL)\n    OR (\"transactions\".\"kind\" = 'reversal' AND \"transactions\".\"amount\" <> 0\n      AND \"transactions\".\"reverses_id\" IS NOT NULL AND \"transactions\".\"reverses_id\" <> \"transactions\".\"id\")\n  "
+        }
+      },
+      "isRLSEnabled": true
+    }
+  },
+  "enums": {
+    "public.transaction_kind": {
+      "name": "transaction_kind",
+      "schema": "public",
+      "values": ["credit", "debit", "reversal"]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
