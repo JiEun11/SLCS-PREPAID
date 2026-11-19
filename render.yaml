@@ -2,7 +2,7 @@ services:
   - type: web
     name: slcs-prepaid
     runtime: node
-    branch: feature/phase3-api
+    branch: main
     plan: free
     autoDeployTrigger: "off"
     buildCommand: npx --yes pnpm@11.25.0 install --prod=false --frozen-lockfile && npx --yes pnpm@11.25.0 build
