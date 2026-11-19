@@ -1,6 +1,13 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createApp } from "./app.js";
 
 import { createServices } from "./services.js";
+
+if (process.env.NODE_ENV === "development") {
+  const envFile = fileURLToPath(new URL("../../../.env", import.meta.url));
+  if (existsSync(envFile)) process.loadEnvFile(envFile);
+}
 
 const port = Number(process.env.PORT ?? 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {

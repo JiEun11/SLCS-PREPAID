@@ -18,11 +18,19 @@ export function requireAdmin(auth?: AdminAuth): RequestHandler {
       return;
     }
 
+    const unavailable = (stage: string) => {
+      response.status(503).json({
+        error: "authentication_unavailable",
+        ...(process.env.NODE_ENV === "development" ? { stage } : {}),
+      });
+    };
+
     if (!auth) {
-      response.status(503).json({ error: "authentication_unavailable" });
+      unavailable("configuration");
       return;
     }
 
+    let stage = "supabase_auth";
     try {
       const userId = await auth.getUserId(token);
       if (!userId) {
@@ -33,6 +41,7 @@ export function requireAdmin(auth?: AdminAuth): RequestHandler {
         return;
       }
 
+      stage = "admin_lookup";
       if (!(await auth.isAdmin(userId))) {
         response.status(403).json({ error: "forbidden" });
         return;
@@ -41,7 +50,7 @@ export function requireAdmin(auth?: AdminAuth): RequestHandler {
       response.locals.adminId = userId;
       next();
     } catch {
-      response.status(503).json({ error: "authentication_unavailable" });
+      unavailable(stage);
     }
   };
 }

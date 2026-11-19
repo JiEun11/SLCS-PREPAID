@@ -33,6 +33,20 @@ describe("API scaffold", () => {
             .required,
         ).toContain("initialAmount");
         expect(customers.get.responses["200"]).toBeDefined();
+        const prefix = "/api/customers/{customerId}";
+        for (const endpoint of ["credits", "debits"]) {
+          expect(
+            response.body.paths[prefix + "/" + endpoint].post.parameters,
+          ).toContainEqual(
+            expect.objectContaining({
+              name: "Idempotency-Key",
+              required: true,
+            }),
+          );
+        }
+        expect(
+          response.body.paths[prefix + "/transactions"].get.responses["200"],
+        ).toBeDefined();
         expect(
           response.body.paths["/api/customers/{customerId}"].get.responses[
             "404"
