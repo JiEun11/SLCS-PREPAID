@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: slcs-prepaid
+    runtime: node
+    branch: main
+    plan: free
+    autoDeployTrigger: "off"
+    buildCommand: npx --yes pnpm@11.25.0 install --prod=false --frozen-lockfile && npx --yes pnpm@11.25.0 build
+    startCommand: node apps/api/dist/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        sync: false

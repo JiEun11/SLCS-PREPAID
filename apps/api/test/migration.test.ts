@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
@@ -56,6 +57,38 @@ it("applies the migration and enforces ledger constraints", async () => {
         .insert(transactions)
         .values({ ...reversal, idempotencyKey: "reverse-2" }),
     ).rejects.toMatchObject({ cause: { code: "23505" } });
+  } finally {
+    await client.close();
+  }
+});
+
+it("preserves Phase 2 ledger rows when adding registration storage", async () => {
+  const client = new PGlite();
+  try {
+    const db = drizzle(client);
+    await client.exec(
+      await readFile("./drizzle/0000_phase2_schema.sql", "utf8"),
+    );
+    const [customer] = await db
+      .insert(customers)
+      .values({ name: "Existing", balance: 1200 })
+      .returning();
+    await client.query(
+      "INSERT INTO transactions (customer_id, actor_id, kind, amount, idempotency_key) VALUES ($1, $2, 'credit', 1200, 'existing')",
+      [customer.id, "13e93656-3dcd-4ba8-9709-3f4f082d0565"],
+    );
+    await client.exec(
+      await readFile("./drizzle/0001_phase3_registration.sql", "utf8"),
+    );
+    expect(await db.select().from(customers)).toEqual([customer]);
+    expect(await db.select().from(transactions)).toEqual([
+      expect.objectContaining({
+        customerId: customer.id,
+        amount: 1200,
+        idempotencyKey: "existing",
+        balanceAfter: null,
+      }),
+    ]);
   } finally {
     await client.close();
   }

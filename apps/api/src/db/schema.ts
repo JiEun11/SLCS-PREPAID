@@ -3,6 +3,8 @@ import {
   check,
   foreignKey,
   integer,
+  jsonb,
+  primaryKey,
   pgEnum,
   pgTable,
   text,
@@ -51,12 +53,17 @@ export const transactions = pgTable(
     kind: transactionKind("kind").notNull(),
     amount: integer("amount").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
+    balanceAfter: integer("balance_after"),
     reversesId: uuid("reverses_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => [
+    check(
+      "transactions_balance_after_nonnegative",
+      sql`${table.balanceAfter} >= 0`,
+    ),
     unique("transactions_actor_idempotency_key").on(
       table.actorId,
       table.idempotencyKey,
@@ -77,4 +84,18 @@ export const transactions = pgTable(
   `,
     ),
   ],
+).enableRLS();
+
+export const idempotencyRequests = pgTable(
+  "idempotency_requests",
+  {
+    actorId: uuid("actor_id").notNull(),
+    key: text("key").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    response: jsonb("response"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.actorId, table.key] })],
 ).enableRLS();
