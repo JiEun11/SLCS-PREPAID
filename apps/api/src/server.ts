@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import express from "express";
 import { createApp } from "./app.js";
 
 import { createServices } from "./services.js";
@@ -15,6 +17,15 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 const { adminAuth, customerService } = createServices(process.env);
-createApp(adminAuth, customerService).listen(port, () => {
+const app = createApp(adminAuth, customerService);
+if (process.env.NODE_ENV === "production") {
+  const webRoot = fileURLToPath(new URL("../../web/dist/", import.meta.url));
+  app.use(express.static(webRoot));
+  app.get(/^\/(?!api(?:\/|$)|assets(?:\/|$)).*/, (_request, response) => {
+    response.sendFile(join(webRoot, "index.html"));
+  });
+}
+
+app.listen(port, "0.0.0.0", () => {
   console.info(`SLCS PREPAID API listening on port ${port}`);
 });
