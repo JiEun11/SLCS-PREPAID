@@ -38,6 +38,7 @@ export function requireAdmin(auth?: AdminAuth): RequestHandler {
         return;
       }
 
+      response.locals.adminId = userId;
       next();
     } catch {
       response.status(503).json({ error: "authentication_unavailable" });

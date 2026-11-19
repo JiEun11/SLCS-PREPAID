@@ -2,12 +2,13 @@ import { createClient } from "@supabase/supabase-js";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { AdminAuth } from "./admin-auth.js";
+import { createCustomerService } from "./customers.js";
 import { admins } from "./db/schema.js";
 
-export function createAdminAuth(env: NodeJS.ProcessEnv): AdminAuth | undefined {
+export function createServices(env: NodeJS.ProcessEnv) {
   const { DATABASE_URL, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } = env;
   if (!DATABASE_URL && !SUPABASE_URL && !SUPABASE_PUBLISHABLE_KEY) {
-    return undefined;
+    return {};
   }
   if (!DATABASE_URL || !SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
     throw new Error(
@@ -24,7 +25,7 @@ export function createAdminAuth(env: NodeJS.ProcessEnv): AdminAuth | undefined {
     },
   });
 
-  return {
+  const adminAuth: AdminAuth = {
     async getUserId(token) {
       const { data, error } = await supabase.auth.getUser(token);
       if (error) {
@@ -48,4 +49,6 @@ export function createAdminAuth(env: NodeJS.ProcessEnv): AdminAuth | undefined {
       return Boolean(admin);
     },
   };
+
+  return { adminAuth, customerService: createCustomerService(db) };
 }

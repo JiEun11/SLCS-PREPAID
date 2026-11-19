@@ -1,5 +1,7 @@
 import express from "express";
 import swaggerUi from "swagger-ui-express";
+import { createCustomerRouter, type CustomerService } from "./customers.js";
+import { customerPaths } from "./customer-openapi.js";
 import { requireAdmin, type AdminAuth } from "./admin-auth.js";
 
 const healthPath = "/api/health";
@@ -13,6 +15,7 @@ const openApi = {
     },
   },
   paths: {
+    ...customerPaths,
     [adminPath]: {
       get: {
         summary: "관리자 권한 확인",
@@ -47,7 +50,10 @@ const openApi = {
   },
 };
 
-export function createApp(adminAuth?: AdminAuth) {
+export function createApp(
+  adminAuth?: AdminAuth,
+  customerService?: CustomerService,
+) {
   const app = express();
   app.disable("x-powered-by");
   app.get(healthPath, (_request, response) => response.json({ status: "ok" }));
@@ -55,6 +61,8 @@ export function createApp(adminAuth?: AdminAuth) {
   app.get(adminPath, requireAdmin(adminAuth), (_request, response) =>
     response.json({ role: "admin" }),
   );
+
+  app.use("/api/customers", createCustomerRouter(adminAuth, customerService));
 
   if (process.env.NODE_ENV === "development") {
     app.get("/api/openapi.json", (_request, response) =>

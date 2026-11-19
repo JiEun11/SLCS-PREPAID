@@ -24,6 +24,20 @@ describe("API scaffold", () => {
         expect(
           response.body.paths["/api/health"].get.responses["200"],
         ).toBeDefined();
+        const customers = response.body.paths["/api/customers"];
+        expect(customers.post.parameters).toContainEqual(
+          expect.objectContaining({ name: "Idempotency-Key", required: true }),
+        );
+        expect(
+          customers.post.requestBody.content["application/json"].schema
+            .required,
+        ).toContain("initialAmount");
+        expect(customers.get.responses["200"]).toBeDefined();
+        expect(
+          response.body.paths["/api/customers/{customerId}"].get.responses[
+            "404"
+          ],
+        ).toBeDefined();
       });
   });
 
