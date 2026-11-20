@@ -184,40 +184,35 @@ it("validates amount, key and active customer while preserving history for delet
   expect((await db.select().from(customers))[0].balance).toBe(2_147_483_647);
 });
 
-it("reverses a debit once, records memo and links both ledger entries", async () => {
+it("reverses a debit once and links both ledger entries", async () => {
   const customer = await register();
   const debit = await post(customer + "/debits", "purchase")
-    .send({ amount: 3000, memo: "  커피  " })
+    .send({ amount: 3000 })
     .expect(201);
   const path =
     customer + "/transactions/" + debit.body.transaction.id + "/reversal";
-  const result = await post(path, "cancel").send({ memo: "정정" }).expect(201);
+  const result = await post(path, "cancel").send({}).expect(201);
   expect(result.body.transaction).toMatchObject({
     kind: "reversal",
     amount: 3000,
     balanceAfter: 10000,
     reversesId: debit.body.transaction.id,
   });
-  await post(path, "cancel").send({ memo: "정정" }).expect(201, result.body);
+  await post(path, "cancel").send({}).expect(201, result.body);
   await post(path, "different")
     .send({})
     .expect(409, { error: "transaction_not_reversible" });
-  await post(path, "cancel")
-    .send({ memo: "다른 메모" })
-    .expect(409, { error: "idempotency_key_conflict" });
   await get(customer + "/transactions")
     .expect(200)
     .expect(({ body }) => {
       expect(body.transactions).toEqual([
         expect.objectContaining({
-          memo: "정정",
           reversesId: debit.body.transaction.id,
         }),
         expect.objectContaining({
-          memo: "커피",
           reversedById: result.body.transaction.id,
         }),
-        expect.objectContaining({ memo: null }),
+        expect.objectContaining({ kind: "credit", amount: 10000 }),
       ]);
     });
   await get(root + "/summary").expect(200, {

@@ -54,7 +54,6 @@ export const transactions = pgTable(
     amount: integer("amount").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     balanceAfter: integer("balance_after"),
-    memo: text("memo"),
     reversesId: uuid("reverses_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
