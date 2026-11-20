@@ -1,7 +1,8 @@
+import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import type { AdminAuth } from "./admin-auth.js";
+import { isPin, PinLimitError, type AdminAuth } from "./admin-auth.js";
 import { createCustomerService } from "./customers.js";
 import { admins } from "./db/schema.js";
 
@@ -14,6 +15,30 @@ export function createServices(env: NodeJS.ProcessEnv) {
     throw new Error(
       "Configure DATABASE_URL, SUPABASE_URL, and SUPABASE_PUBLISHABLE_KEY together",
     );
+  }
+
+  const { ADMIN_AUTH_EMAIL, ADMIN_AUTH_PASSWORD, ADMIN_PIN } = env;
+  const email = ADMIN_AUTH_EMAIL?.trim().toLowerCase();
+  const pinConfigured = Boolean(
+    email && ADMIN_AUTH_PASSWORD && isPin(ADMIN_PIN),
+  );
+  let retries = 0;
+  let resetAt = 0;
+  function checkPin(pin: string) {
+    if (!pinConfigured || !isPin(pin)) return false;
+    const now = Date.now();
+    if (now >= resetAt) {
+      retries = 0;
+      resetAt = now + 15 * 60_000;
+    }
+    if (retries >= 8) throw new PinLimitError(resetAt - now);
+    const valid = timingSafeEqual(Buffer.from(pin), Buffer.from(ADMIN_PIN!));
+    if (valid) {
+      retries = 0;
+    } else {
+      retries++;
+    }
+    return valid;
   }
 
   const db = drizzle(DATABASE_URL);
@@ -38,7 +63,12 @@ export function createServices(env: NodeJS.ProcessEnv) {
         }
         throw error;
       }
+      if (!pinConfigured || data.user?.email?.toLowerCase() !== email)
+        return null;
       return data.user?.id ?? null;
+    },
+    async reauthenticate(_token, _userId, pin) {
+      return checkPin(pin);
     },
     async isAdmin(userId) {
       const [admin] = await db
@@ -49,6 +79,31 @@ export function createServices(env: NodeJS.ProcessEnv) {
       return Boolean(admin);
     },
   };
+
+  if (pinConfigured) {
+    adminAuth.signInWithPin = async (pin) => {
+      if (!checkPin(pin)) return null;
+      const verifier = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+          detectSessionInUrl: false,
+        },
+      });
+      const { data, error } = await verifier.auth.signInWithPassword({
+        email: email!,
+        password: ADMIN_AUTH_PASSWORD!,
+      });
+      if (error || !data.session || !data.user)
+        throw new Error("Admin session unavailable");
+      if (!(await adminAuth.isAdmin(data.user.id)))
+        throw new Error("Admin membership missing");
+      return {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      };
+    };
+  }
 
   return { adminAuth, customerService: createCustomerService(db) };
 }

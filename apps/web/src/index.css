@@ -221,6 +221,11 @@ input {
   font-size: 1rem;
   color: var(--foreground);
 }
+input[type="checkbox"] {
+  width: 1.25rem;
+  min-height: 1.25rem;
+  flex: none;
+}
 input::placeholder {
   color: #776e73;
 }

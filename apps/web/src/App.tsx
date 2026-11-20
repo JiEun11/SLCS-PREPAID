@@ -17,19 +17,17 @@ function Login({ loading }: { loading: boolean }) {
     setPending(true);
     setNotice("");
     try {
-      const { error } = await auth.signInWithPassword({
-        email: String(data.get("email")).trim(),
-        password: String(data.get("password")),
+      const session = await api<{
+        access_token: string;
+        refresh_token: string;
+      }>("", "/admin/pin", {
+        body: { pin: String(data.get("pin")) },
       });
-      if (error) {
-        setNotice(
-          error.status === 400 || error.status === 401
-            ? "이메일과 비밀번호를 확인해 주세요."
-            : "로그인 서비스에 연결할 수 없습니다. 다시 시도해 주세요.",
-        );
-      }
-    } catch {
-      setNotice("로그인 서비스에 연결할 수 없습니다. 다시 시도해 주세요.");
+      const { error } = await auth.setSession(session);
+      if (error)
+        setNotice("로그인 세션을 시작하지 못했습니다. 다시 시도해 주세요.");
+    } catch (error) {
+      setNotice(messageFor(error));
     } finally {
       setPending(false);
     }
@@ -42,15 +40,14 @@ function Login({ loading }: { loading: boolean }) {
         <h1>관리자 로그인</h1>
         <p className="secondary">스몰랩커피스탠드 선결제 장부</p>
         <label>
-          이메일
-          <input name="email" type="email" autoComplete="username" required />
-        </label>
-        <label>
-          비밀번호
+          관리자 PIN (숫자 6자리)
           <input
-            name="password"
+            name="pin"
             type="password"
-            autoComplete="current-password"
+            inputMode="numeric"
+            pattern="[0-9]{6}"
+            maxLength={6}
+            autoComplete="off"
             required
           />
         </label>
@@ -125,7 +122,7 @@ function Workspace() {
             className="button button-outline"
             onClick={() => void auth?.signOut({ scope: "local" })}
           >
-            다른 계정으로 로그인
+            PIN 다시 입력
           </button>
         </section>
       </main>

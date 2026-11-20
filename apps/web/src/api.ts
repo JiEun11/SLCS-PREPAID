@@ -11,6 +11,7 @@ export type Transaction = {
   balanceAfter: number | null;
   createdAt: string;
   actorId?: string;
+  memo?: string | null;
   reversesId?: string | null;
   reversedById?: string | null;
 };
@@ -41,6 +42,9 @@ export class ApiError extends Error {
 const errors: Record<string, string> = {
   authentication_unavailable:
     "관리자 확인 서비스에 연결하지 못했습니다. 다시 확인해 주세요.",
+  invalid_pin: "PIN이 맞지 않습니다.",
+  pin_rate_limited:
+    "PIN 입력 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
   unauthorized: "로그인 세션이 만료됐습니다. 다시 로그인해 주세요.",
   forbidden: "관리자 권한이 있는 계정으로 로그인해 주세요.",
   insufficient_balance: "잔액이 부족합니다. 현재 잔액을 확인해 주세요.",
@@ -48,6 +52,11 @@ const errors: Record<string, string> = {
   customer_not_found: "고객을 찾을 수 없습니다. 목록을 새로고침해 주세요.",
   idempotency_key_conflict:
     "요청 번호가 이미 사용되었습니다. 거래 내역을 확인해 주세요.",
+  transaction_not_reversible: "이미 취소됐거나 취소할 수 없는 거래입니다.",
+  transaction_not_found: "원거래를 찾을 수 없습니다.",
+  reauthentication_failed: "관리자 PIN을 확인해 주세요.",
+  customer_count_changed:
+    "고객 수가 바뀌었습니다. 창을 닫고 다시 확인해 주세요.",
   invalid_request: "입력값을 확인해 주세요.",
 };
 
@@ -63,15 +72,17 @@ export async function api<T>(
   path: string,
   options: {
     body?: object;
+    method?: "PATCH" | "DELETE";
     key?: string;
     signal?: AbortSignal;
   } = {},
 ): Promise<T> {
-  const headers = new Headers({ Authorization: "Bearer " + token });
+  const headers = new Headers();
+  if (token) headers.set("Authorization", "Bearer " + token);
   if (options.body) headers.set("Content-Type", "application/json");
   if (options.key) headers.set("Idempotency-Key", options.key);
   const response = await fetch("/api" + path, {
-    method: options.body ? "POST" : "GET",
+    method: options.method ?? (options.body ? "POST" : "GET"),
     body: options.body && JSON.stringify(options.body),
     signal: options.signal,
     headers,

@@ -15,6 +15,13 @@
       "when": 1795071862118,
       "tag": "0001_phase3_registration",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795135064889,
+      "tag": "0002_transaction_memo",
+      "breakpoints": true
     }
   ]
 }

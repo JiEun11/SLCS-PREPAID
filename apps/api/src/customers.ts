@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   alias,
   type PgDatabase,
@@ -7,7 +7,7 @@ import {
 } from "drizzle-orm/pg-core";
 import express, { type ErrorRequestHandler } from "express";
 import { z } from "zod";
-import { requireAdmin, type AdminAuth } from "./admin-auth.js";
+import { PinLimitError, requireAdmin, type AdminAuth } from "./admin-auth.js";
 import { customers, idempotencyRequests, transactions } from "./db/schema.js";
 
 const maximumBalance = 2_147_483_647;
@@ -26,16 +26,36 @@ const pageFields = {
 };
 const pageSchema = z.strictObject(pageFields);
 
-export const movementSchema = z.strictObject({ amount: positiveMoney });
-
+const nameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .refine((name) => !name.includes("\0"));
+const memoSchema = z
+  .string()
+  .trim()
+  .max(300)
+  .refine((memo) => !memo.includes("\0"))
+  .optional();
+export const movementSchema = z.strictObject({
+  amount: positiveMoney,
+  memo: memoSchema,
+});
+export const renameSchema = z.strictObject({ name: nameSchema });
+export const reversalInputSchema = z.strictObject({ memo: memoSchema });
+export const bulkDeleteSchema = z.strictObject({
+  customerIds: z.array(z.uuid()).min(1).max(100),
+});
+export const deleteAllSchema = z.strictObject({
+  confirmation: z.literal("전체 삭제"),
+  expectedCount: z.number().int().nonnegative(),
+  pin: z.string().regex(/^[0-9]{6}$/),
+});
 export const registrationSchema = z.strictObject({
-  name: z
-    .string()
-    .trim()
-    .min(1)
-    .max(120)
-    .refine((name) => !name.includes("\0")),
+  name: nameSchema,
   initialAmount: positiveMoney,
+  memo: memoSchema,
 });
 export const keySchema = z.string().regex(/^[!-+\x2D-~]{1,128}$/);
 export const customerIdSchema = z.uuid();
@@ -77,7 +97,8 @@ function customerResponse({
 
 const movementTransactionSchema = z.object({
   id: z.uuid(),
-  kind: z.enum(["credit", "debit"]),
+  kind: z.enum(["credit", "debit", "reversal"]),
+  reversesId: z.uuid().optional(),
   amount: z.number().int(),
   balanceAfter: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
@@ -90,6 +111,7 @@ export const transactionSchema = movementTransactionSchema.extend({
   kind: z.enum(["credit", "debit", "reversal"]),
   balanceAfter: z.number().int().nonnegative().nullable(),
   actorId: z.uuid(),
+  memo: z.string().nullable(),
   reversesId: z.uuid().nullable(),
   reversedById: z.uuid().nullable(),
 });
@@ -101,7 +123,7 @@ export const summarySchema = z.object({
 
 class CustomerError extends Error {
   constructor(
-    public status: 404 | 409,
+    public status: 403 | 404 | 409 | 503,
     public code: string,
   ) {
     super(code);
@@ -195,6 +217,7 @@ const entryFields = {
   amount: transactions.amount,
   balanceAfter: transactions.balanceAfter,
   actorId: transactions.actorId,
+  memo: transactions.memo,
   createdAt: transactions.createdAt,
   reversesId: transactions.reversesId,
 };
@@ -205,19 +228,29 @@ function entryResponse(
     amount: number;
     balanceAfter: number | null;
     actorId: string;
+    memo: string | null;
     createdAt: Date;
     reversesId: string | null;
   },
   reversedById: string | null,
 ) {
-  const { id, kind, amount, balanceAfter, actorId, createdAt, reversesId } =
-    entry;
+  const {
+    id,
+    kind,
+    amount,
+    balanceAfter,
+    actorId,
+    memo,
+    createdAt,
+    reversesId,
+  } = entry;
   return {
     id,
     kind,
     amount,
     balanceAfter,
     actorId,
+    memo,
     createdAt: createdAt.toISOString(),
     reversesId,
     reversedById,
@@ -238,7 +271,12 @@ export function createCustomerService<T extends PgQueryResultHKT>(
         db,
         actorId,
         key,
-        ["register-customer", input.name, input.initialAmount],
+        [
+          "register-customer",
+          input.name,
+          input.initialAmount,
+          ...(input.memo ? [input.memo] : []),
+        ],
         registrationResponseSchema,
         async (tx) => {
           const [customer] = await tx
@@ -251,6 +289,7 @@ export function createCustomerService<T extends PgQueryResultHKT>(
             kind: "credit",
             amount: input.initialAmount,
             balanceAfter: customer.balance,
+            memo: input.memo || null,
             idempotencyKey: key,
           });
           return {
@@ -270,14 +309,15 @@ export function createCustomerService<T extends PgQueryResultHKT>(
       actorId: string,
       key: string,
       customerId: string,
-      kind: "credit" | "debit",
-      amount: number,
+      kind: "credit" | "debit" | "reversal",
+      target: number | string,
+      memo?: string,
     ) {
       return idempotent(
         db,
         actorId,
         key,
-        [kind, customerId, amount],
+        [kind, customerId, target, ...(memo ? [memo] : [])],
         movementResponseSchema,
         async (tx) => {
           const [customer] = await tx
@@ -289,7 +329,28 @@ export function createCustomerService<T extends PgQueryResultHKT>(
             .for("update");
           if (!customer) throw new CustomerError(404, "customer_not_found");
 
-          const signedAmount = kind === "credit" ? amount : -amount;
+          let signedAmount: number;
+          let reversesId: string | undefined;
+          if (typeof target === "string") {
+            const [original] = await tx
+              .select({ ...entryFields, reversedById: reversal.id })
+              .from(transactions)
+              .leftJoin(reversal, eq(reversal.reversesId, transactions.id))
+              .where(
+                and(
+                  eq(transactions.customerId, customerId),
+                  eq(transactions.id, target),
+                ),
+              );
+            if (!original)
+              throw new CustomerError(404, "transaction_not_found");
+            if (original.kind === "reversal" || original.reversedById)
+              throw new CustomerError(409, "transaction_not_reversible");
+            reversesId = original.id;
+            signedAmount = -original.amount;
+          } else {
+            signedAmount = kind === "credit" ? target : -target;
+          }
           const balance = customer.balance + signedAmount;
           if (balance < 0) throw new CustomerError(409, "insufficient_balance");
           if (balance > maximumBalance)
@@ -305,6 +366,8 @@ export function createCustomerService<T extends PgQueryResultHKT>(
             kind,
             amount: signedAmount,
             balanceAfter: balance,
+            memo: memo || null,
+            reversesId,
             idempotencyKey: key,
           });
           return {
@@ -313,11 +376,49 @@ export function createCustomerService<T extends PgQueryResultHKT>(
               ...entry,
               kind,
               amount: signedAmount,
+              reversesId,
               balanceAfter: balance,
             },
           };
         },
       );
+    },
+
+    async rename(id: string, name: string) {
+      const [customer] = await db
+        .update(customers)
+        .set({ name })
+        .where(and(eq(customers.id, id), isNull(customers.deletedAt)))
+        .returning();
+      if (!customer) throw new CustomerError(404, "customer_not_found");
+      return customerResponse(customer);
+    },
+
+    async softDelete(ids: string[]) {
+      const result = await db
+        .update(customers)
+        .set({ deletedAt: sql`now()` })
+        .where(and(inArray(customers.id, ids), isNull(customers.deletedAt)))
+        .returning({ id: customers.id });
+      return { deletedCount: result.length };
+    },
+
+    async deleteAll(expectedCount: number) {
+      return db.transaction(async (tx) => {
+        // Exclude writers and SELECT FOR UPDATE while checking the count.
+        await tx.execute(sql`lock table ${customers} in exclusive mode`);
+        const [current] = await tx
+          .select({ count: sql<string>`count(*)::text` })
+          .from(customers)
+          .where(isNull(customers.deletedAt));
+        if (current.count !== String(expectedCount))
+          throw new CustomerError(409, "customer_count_changed");
+        await tx
+          .update(customers)
+          .set({ deletedAt: sql`now()` })
+          .where(isNull(customers.deletedAt));
+        return { deletedCount: expectedCount };
+      });
     },
 
     async history(
@@ -345,7 +446,7 @@ export function createCustomerService<T extends PgQueryResultHKT>(
         .select({
           totalBalance: sql<string>`coalesce(sum(${customers.balance}), 0)::text`,
           customerCount: sql<string>`count(*)::text`,
-          totalUsed: sql<string>`(select coalesce(sum(-${transactions.amount}::bigint), 0)::text from ${transactions} where ${transactions.kind} = 'debit')`,
+          totalUsed: sql<string>`(select coalesce(sum(-original.amount::bigint), 0)::text from ${transactions} as original where original.kind = 'debit' and not exists (select 1 from ${transactions} as correction where correction.reverses_id = original.id))`,
         })
         .from(customers)
         .where(isNull(customers.deletedAt));
@@ -475,11 +576,96 @@ export function createCustomerRouter(
           id.data.toLowerCase(),
           kind,
           input.data.amount,
+          input.data.memo,
         );
         response.status(201).json(result);
       },
     );
   }
+
+  router.post(
+    "/:customerId/transactions/:transactionId/reversal",
+    express.json(),
+    async (request, response) => {
+      const customer = customerIdSchema.safeParse(request.params.customerId);
+      const target = customerIdSchema.safeParse(request.params.transactionId);
+      const key = keySchema.safeParse(request.get("Idempotency-Key"));
+      const input = reversalInputSchema.safeParse(request.body);
+      if (
+        !customer.success ||
+        !target.success ||
+        !key.success ||
+        !input.success
+      ) {
+        response.status(400).json({ error: "invalid_request" });
+        return;
+      }
+      response
+        .status(201)
+        .json(
+          await service.move(
+            response.locals.adminId,
+            key.data,
+            customer.data.toLowerCase(),
+            "reversal",
+            target.data.toLowerCase(),
+            input.data.memo,
+          ),
+        );
+    },
+  );
+
+  router.patch("/:customerId", express.json(), async (request, response) => {
+    const customer = customerIdSchema.safeParse(request.params.customerId);
+    const input = renameSchema.safeParse(request.body);
+    if (!customer.success || !input.success) {
+      response.status(400).json({ error: "invalid_request" });
+      return;
+    }
+    response.json(await service.rename(customer.data, input.data.name));
+  });
+
+  router.delete("/:customerId", async (request, response) => {
+    const customer = customerIdSchema.safeParse(request.params.customerId);
+    if (!customer.success) {
+      response.status(400).json({ error: "invalid_request" });
+      return;
+    }
+    response.json(await service.softDelete([customer.data]));
+  });
+
+  router.post("/bulk-delete", express.json(), async (request, response) => {
+    const input = bulkDeleteSchema.safeParse(request.body);
+    if (!input.success) {
+      response.status(400).json({ error: "invalid_request" });
+      return;
+    }
+    response.json(await service.softDelete(input.data.customerIds));
+  });
+
+  router.post("/delete-all", express.json(), async (request, response) => {
+    const input = deleteAllSchema.safeParse(request.body);
+    if (!input.success) {
+      response.status(400).json({ error: "invalid_request" });
+      return;
+    }
+    const token = request.get("authorization")?.slice(7) ?? "";
+    let verified: boolean;
+    try {
+      if (!adminAuth?.reauthenticate)
+        throw new Error("Reauthentication unavailable");
+      verified = await adminAuth.reauthenticate(
+        token,
+        response.locals.adminId,
+        input.data.pin,
+      );
+    } catch (error) {
+      if (error instanceof PinLimitError) throw error;
+      throw new CustomerError(503, "authentication_unavailable");
+    }
+    if (!verified) throw new CustomerError(403, "reauthentication_failed");
+    response.json(await service.deleteAll(input.data.expectedCount));
+  });
 
   router.get("/:customerId", async (request, response) => {
     const id = customerIdSchema.safeParse(request.params.customerId);
@@ -503,6 +689,13 @@ export function createCustomerRouter(
   ) => {
     if (response.headersSent) {
       next(error);
+      return;
+    }
+    if (error instanceof PinLimitError) {
+      response
+        .set("Retry-After", String(Math.ceil(error.retryMs / 1000)))
+        .status(429)
+        .json({ error: "pin_rate_limited" });
       return;
     }
     if (error instanceof CustomerError) {
