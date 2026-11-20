@@ -15,6 +15,13 @@
       "when": 1795071862118,
       "tag": "0001_phase3_registration",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795158691509,
+      "tag": "0002_customer_phone_last4",
+      "breakpoints": true
     }
   ]
 }

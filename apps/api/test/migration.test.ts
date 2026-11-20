@@ -69,10 +69,12 @@ it("preserves Phase 2 ledger rows when adding registration storage", async () =>
     await client.exec(
       await readFile("./drizzle/0000_phase2_schema.sql", "utf8"),
     );
-    const [customer] = await db
-      .insert(customers)
-      .values({ name: "Existing", balance: 1200 })
-      .returning();
+    const {
+      rows: [customer],
+    } = await client.query<{ id: string; name: string; balance: number }>(
+      "INSERT INTO customers (name, balance) VALUES ($1, $2) RETURNING id, name, balance",
+      ["Existing", 1200],
+    );
     await client.query(
       "INSERT INTO transactions (customer_id, actor_id, kind, amount, idempotency_key) VALUES ($1, $2, 'credit', 1200, 'existing')",
       [customer.id, "13e93656-3dcd-4ba8-9709-3f4f082d0565"],
@@ -80,7 +82,12 @@ it("preserves Phase 2 ledger rows when adding registration storage", async () =>
     await client.exec(
       await readFile("./drizzle/0001_phase3_registration.sql", "utf8"),
     );
-    expect(await db.select().from(customers)).toEqual([customer]);
+    await client.exec(
+      await readFile("./drizzle/0002_customer_phone_last4.sql", "utf8"),
+    );
+    expect(await db.select().from(customers)).toEqual([
+      expect.objectContaining({ ...customer, phoneLast4: null }),
+    ]);
     expect(await db.select().from(transactions)).toEqual([
       expect.objectContaining({
         customerId: customer.id,

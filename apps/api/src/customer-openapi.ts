@@ -156,7 +156,7 @@ export const customerPaths = {
       },
     },
     get: {
-      summary: "활성 고객 목록 및 이름 검색",
+      summary: "활성 고객 목록 및 이름·휴대폰 뒷자리 검색",
       security,
       parameters: [
         { name: "q", in: "query", schema: { type: "string", maxLength: 120 } },

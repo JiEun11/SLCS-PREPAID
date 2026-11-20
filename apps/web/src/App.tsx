@@ -1,10 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState, type FormEvent } from "react";
 import { Route, Routes } from "react-router";
 import { api, auth, ApiError, messageFor } from "./api";
 import { Brand } from "./Brand";
-import { Counter } from "./Counter";
+import { Counter, customerListOptions, summaryOptions } from "./Counter";
 
 function Login({ loading }: { loading: boolean }) {
   const [notice, setNotice] = useState("");
@@ -70,14 +70,17 @@ function Login({ loading }: { loading: boolean }) {
 function Workspace() {
   const [session, setSession] = useState<Session | null>(null);
   const [starting, setStarting] = useState(Boolean(auth));
+  const cache = useQueryClient();
+  const token = session?.access_token;
+  const actorId = session?.user.id;
   const admin = useQuery({
-    queryKey: ["admin", session?.user.id],
-    gcTime: 0,
+    ...summaryOptions(token ?? "", actorId ?? ""),
     enabled: Boolean(session),
-    retry: false,
-    queryFn: ({ signal }) =>
-      api(session!.access_token, "/admin/me", { signal }),
   });
+  useEffect(() => {
+    if (token && actorId)
+      void cache.prefetchInfiniteQuery(customerListOptions(token, actorId, ""));
+  }, [cache, token, actorId]);
   useEffect(() => {
     if (!auth) return;
     const {

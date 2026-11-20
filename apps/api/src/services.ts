@@ -50,22 +50,32 @@ export function createServices(env: NodeJS.ProcessEnv) {
     },
   });
 
-  const adminAuth: AdminAuth = {
-    async getUserId(token) {
-      const { data, error } = await supabase.auth.getUser(token);
-      if (error) {
-        if (
-          error.status === 400 ||
-          error.status === 401 ||
-          error.status === 403
-        ) {
-          return null;
-        }
-        throw error;
-      }
-      if (!pinConfigured || data.user?.email?.toLowerCase() !== email)
+  // Share only in-flight checks. Each later request is still checked against Supabase.
+  const tokenChecks = new Map<string, Promise<string | null>>();
+  async function verifyToken(token: string) {
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error) {
+      if (
+        error.status === 400 ||
+        error.status === 401 ||
+        error.status === 403
+      ) {
         return null;
-      return data.user?.id ?? null;
+      }
+      throw error;
+    }
+    if (!pinConfigured || data.user?.email?.toLowerCase() !== email)
+      return null;
+    return data.user?.id ?? null;
+  }
+
+  const adminAuth: AdminAuth = {
+    getUserId(token) {
+      const pending = tokenChecks.get(token);
+      if (pending) return pending;
+      const check = verifyToken(token).finally(() => tokenChecks.delete(token));
+      tokenChecks.set(token, check);
+      return check;
     },
     async reauthenticate(_token, _userId, pin) {
       return checkPin(pin);

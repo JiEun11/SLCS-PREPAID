@@ -105,3 +105,31 @@ describe("admin PIN login", () => {
       .expect(429, { error: "pin_rate_limited" });
   });
 });
+
+it("shares concurrent Supabase token checks without caching completed checks", async () => {
+  const token = "test-token";
+  const email = "test@example.test";
+  const fetchUser = vi.fn(async () => Response.json({ id: userId, email }));
+  vi.stubGlobal("fetch", fetchUser);
+  try {
+    const { adminAuth } = createServices({
+      DATABASE_URL: "postgres://localhost/test",
+      SUPABASE_URL: "https://example.test",
+      SUPABASE_PUBLISHABLE_KEY: "test-key",
+      ADMIN_AUTH_EMAIL: email,
+      ADMIN_AUTH_PASSWORD: "test-auth-password",
+      ADMIN_PIN: "012345",
+    });
+    expect(
+      await Promise.all([
+        adminAuth!.getUserId(token),
+        adminAuth!.getUserId(token),
+      ]),
+    ).toEqual([userId, userId]);
+    expect(fetchUser).toHaveBeenCalledTimes(1);
+    expect(await adminAuth!.getUserId(token)).toBe(userId);
+    expect(fetchUser).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

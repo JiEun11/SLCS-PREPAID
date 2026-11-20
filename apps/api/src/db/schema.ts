@@ -25,6 +25,7 @@ export const customers = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     name: text("name").notNull(),
+    phoneLast4: text("phone_last4"),
     balance: integer("balance").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -32,6 +33,10 @@ export const customers = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (table) => [
+    check(
+      "customers_phone_last4_format",
+      sql`${table.phoneLast4} ~ '^[0-9]{4}$'`,
+    ),
     check("customers_balance_nonnegative", sql`${table.balance} >= 0`),
   ],
 ).enableRLS();
