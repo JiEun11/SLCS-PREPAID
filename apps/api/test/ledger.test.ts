@@ -20,6 +20,9 @@ const api = request(
       async getUserId(token) {
         return token === "admin" ? actorId : null;
       },
+      async reauthenticate(_token, _id, password) {
+        return password === "123456";
+      },
       async isAdmin() {
         return true;
       },
@@ -179,4 +182,114 @@ it("validates amount, key and active customer while preserving history for delet
     totalUsed: "0",
   });
   expect((await db.select().from(customers))[0].balance).toBe(2_147_483_647);
+});
+
+it("reverses a debit once, records memo and links both ledger entries", async () => {
+  const customer = await register();
+  const debit = await post(customer + "/debits", "purchase")
+    .send({ amount: 3000, memo: "  커피  " })
+    .expect(201);
+  const path =
+    customer + "/transactions/" + debit.body.transaction.id + "/reversal";
+  const result = await post(path, "cancel").send({ memo: "정정" }).expect(201);
+  expect(result.body.transaction).toMatchObject({
+    kind: "reversal",
+    amount: 3000,
+    balanceAfter: 10000,
+    reversesId: debit.body.transaction.id,
+  });
+  await post(path, "cancel").send({ memo: "정정" }).expect(201, result.body);
+  await post(path, "different")
+    .send({})
+    .expect(409, { error: "transaction_not_reversible" });
+  await post(path, "cancel")
+    .send({ memo: "다른 메모" })
+    .expect(409, { error: "idempotency_key_conflict" });
+  await get(customer + "/transactions")
+    .expect(200)
+    .expect(({ body }) => {
+      expect(body.transactions).toEqual([
+        expect.objectContaining({
+          memo: "정정",
+          reversesId: debit.body.transaction.id,
+        }),
+        expect.objectContaining({
+          memo: "커피",
+          reversedById: result.body.transaction.id,
+        }),
+        expect.objectContaining({ memo: null }),
+      ]);
+    });
+  await get(root + "/summary").expect(200, {
+    totalBalance: "10000",
+    customerCount: "1",
+    totalUsed: "0",
+  });
+});
+
+it("blocks credit reversals when the resulting balance would be negative", async () => {
+  const customer = await register();
+  const credit = await post(customer + "/credits", "top-up")
+    .send({ amount: 3000 })
+    .expect(201);
+  await post(customer + "/debits", "purchase")
+    .send({ amount: 12000 })
+    .expect(201);
+  await post(
+    customer + "/transactions/" + credit.body.transaction.id + "/reversal",
+    "cancel",
+  )
+    .send({})
+    .expect(409, { error: "insufficient_balance" });
+  expect(await db.select().from(transactions)).toHaveLength(3);
+});
+
+it("renames and soft deletes individual, selected and all customers", async () => {
+  const customer = await register();
+  const second = await post(root, "second")
+    .send({ name: "둘", initialAmount: 2000 })
+    .expect(201);
+  await api
+    .patch(customer)
+    .auth("admin", { type: "bearer" })
+    .send({ name: "변경" })
+    .expect(200)
+    .expect(({ body }) => expect(body.name).toBe("변경"));
+  await api
+    .delete(customer)
+    .auth("admin", { type: "bearer" })
+    .expect(200, { deletedCount: 1 });
+  await post(root + "/bulk-delete", "bulk")
+    .send({ customerIds: [second.body.customer.id, second.body.customer.id] })
+    .expect(200, { deletedCount: 1 });
+  await get(customer + "/transactions")
+    .expect(200)
+    .expect(({ body }) => expect(body.transactions).toHaveLength(1));
+  await post(root, "third")
+    .send({ name: "셋", initialAmount: 1000 })
+    .expect(201);
+  const deletion = {
+    confirmation: "전체 삭제",
+    expectedCount: 1,
+    pin: "123456",
+  };
+  await post(root + "/delete-all", "all")
+    .send({ ...deletion, confirmation: "wrong" })
+    .expect(400);
+  await post(root + "/delete-all", "all")
+    .send({ ...deletion, pin: "654321" })
+    .expect(403, { error: "reauthentication_failed" });
+  await post(root + "/delete-all", "all")
+    .send({ ...deletion, expectedCount: 2 })
+    .expect(409, { error: "customer_count_changed" });
+  await post(root + "/delete-all", "all")
+    .send(deletion)
+    .expect(200, { deletedCount: 1 });
+  await get(root).expect(200, { customers: [] });
+  expect(
+    (await db.select().from(customers))
+      .map(({ balance }) => balance)
+      .sort((a, b) => a - b),
+  ).toEqual([1000, 2000, 10000]);
+  expect(await db.select().from(transactions)).toHaveLength(3);
 });

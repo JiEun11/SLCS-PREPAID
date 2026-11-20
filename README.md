@@ -53,7 +53,7 @@ pnpm --filter @slcs/api exec node --env-file="$PWD/.env" ./node_modules/drizzle-
 루트의 로컬 환경에서 API용 Supabase 값과 함께 브라우저 로그인용
 VITE_SUPABASE_URL 및 VITE_SUPABASE_PUBLISHABLE_KEY를 설정합니다. 두 값은
 브라우저에 공개되는 프로젝트 URL과 publishable key입니다. 관리자에게는
-Supabase Auth 이메일·비밀번호 계정과 admins 등록이 필요합니다.
+Supabase Auth 계정 하나와 해당 계정의 admins 등록이 필요합니다.\n서버에 ADMIN_AUTH_EMAIL, ADMIN_AUTH_PASSWORD, ADMIN_PIN을 설정합니다.\nAuth 비밀번호는 별도의 충분히 긴 무작위 값이며 PIN은 숫자 6자리입니다.\n세 값은 서버에만 설정합니다.
 
     pnpm install --frozen-lockfile
     pnpm dev
@@ -61,8 +61,12 @@ Supabase Auth 이메일·비밀번호 계정과 admins 등록이 필요합니다
 브라우저에서 http://localhost:5173을 열고 로그인합니다. 로컬 개발에서는
 Vite가 API를 프록시합니다. 배포 환경에서는 웹과 /api가 동일한 HTTPS
 출처에서 제공되도록 라우팅하고, 웹 빌드 시 VITE 값을 전달합니다.
-Phase 3 API에는 0001_phase3_registration 마이그레이션이 적용된 DB와
+Phase 3 API에는 0001_phase3_registration과 0002_transaction_memo가 적용된 DB와
 신규 테이블에 접근할 수 있는 API 역할이 필요합니다.
 
 카운터 요약의 고객 수와 전체 잔액은 활성 고객 기준입니다. 누적 사용액은
-전체 고객의 차감 거래 합계입니다. 거래 시각은 서울 시간으로 표시합니다.
+전체 고객의 취소되지 않은 차감 거래 합계입니다. 거래 시각은 서울 시간으로 표시합니다.
+
+거래를 취소하면 원거래와 연결된 반대 금액이 기록됩니다. 고객 삭제 시
+잔액과 거래 내역은 보존됩니다. 전체 고객 삭제는 현재 관리자 PIN,
+확인 문구 “전체 삭제”, 화면에서 확인한 활성 고객 수가 필요합니다.

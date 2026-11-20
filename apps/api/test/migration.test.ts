@@ -80,6 +80,9 @@ it("preserves Phase 2 ledger rows when adding registration storage", async () =>
     await client.exec(
       await readFile("./drizzle/0001_phase3_registration.sql", "utf8"),
     );
+    await client.exec(
+      await readFile("./drizzle/0002_transaction_memo.sql", "utf8"),
+    );
     expect(await db.select().from(customers)).toEqual([customer]);
     expect(await db.select().from(transactions)).toEqual([
       expect.objectContaining({
@@ -87,6 +90,7 @@ it("preserves Phase 2 ledger rows when adding registration storage", async () =>
         amount: 1200,
         idempotencyKey: "existing",
         balanceAfter: null,
+        memo: null,
       }),
     ]);
   } finally {

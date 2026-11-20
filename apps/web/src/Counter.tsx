@@ -52,7 +52,9 @@ function signed(amount: number) {
 }
 
 type Action =
-  { kind: "register" } | { kind: "credit" | "debit"; customer: Customer };
+  | { kind: "register" }
+  | { kind: "credit" | "debit"; customer: Customer }
+  | { kind: "reversal"; customer: Customer; entry: Transaction };
 type Result = {
   customer: Pick<Customer, "name" | "balance">;
   transaction: Transaction;
@@ -148,7 +150,9 @@ function AmountDialog({
     ? "신규 고객 등록"
     : action.kind === "credit"
       ? "잔액 충전"
-      : "사용 금액 차감";
+      : action.kind === "reversal"
+        ? "거래 취소"
+        : "사용 금액 차감";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -157,9 +161,8 @@ function AmountDialog({
     const amount = Number(entered);
     const name = String(form.get("name") ?? "").trim();
     if (
-      !/^[0-9]+$/.test(entered) ||
-      amount < 1 ||
-      amount > 2_147_483_647 ||
+      (action.kind !== "reversal" &&
+        (!/^[0-9]+$/.test(entered) || amount < 1 || amount > 2_147_483_647)) ||
       (register && !name)
     ) {
       setError(
@@ -173,8 +176,17 @@ function AmountDialog({
       ? "/customers"
       : "/customers/" +
         action.customer.id +
-        (action.kind === "credit" ? "/credits" : "/debits");
-    const body = register ? { name, initialAmount: amount } : { amount };
+        (action.kind === "credit"
+          ? "/credits"
+          : action.kind === "reversal"
+            ? "/transactions/" + action.entry.id + "/reversal"
+            : "/debits");
+    const memo = String(form.get("memo") ?? "").trim() || undefined;
+    const body = register
+      ? { name, initialAmount: amount, memo }
+      : action.kind === "reversal"
+        ? { memo }
+        : { amount, memo };
     const signature = JSON.stringify([actorId, path, body]);
     const storageKey = "slcs:pending:" + signature;
     let key: string;
@@ -251,27 +263,38 @@ function AmountDialog({
             <strong>{money(action.customer.balance)}</strong>
           </div>
         )}
+        {action.kind === "reversal" ? (
+          <p>
+            이 거래를 취소하면 잔액에 {signed(-action.entry.amount)}이
+            반영됩니다.
+          </p>
+        ) : (
+          <label>
+            {register
+              ? "최초 충전 금액"
+              : action.kind === "credit"
+                ? "충전 금액"
+                : "사용 금액"}
+            <span className="amount-field">
+              <input
+                name="amount"
+                value={entered}
+                onChange={(event) => setEntered(event.target.value)}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]+"
+                maxLength={10}
+                placeholder="0"
+                required
+                readOnly={pending || uncertain}
+              />
+              <span>원</span>
+            </span>
+          </label>
+        )}
         <label>
-          {register
-            ? "최초 충전 금액"
-            : action.kind === "credit"
-              ? "충전 금액"
-              : "사용 금액"}
-          <span className="amount-field">
-            <input
-              name="amount"
-              value={entered}
-              onChange={(event) => setEntered(event.target.value)}
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]+"
-              maxLength={10}
-              placeholder="0"
-              required
-              readOnly={pending || uncertain}
-            />
-            <span>원</span>
-          </span>
+          메모 (선택)
+          <input name="memo" maxLength={300} readOnly={pending || uncertain} />
         </label>
         {error && (
           <p className="error" role="alert">
@@ -287,7 +310,9 @@ function AmountDialog({
                 ? "등록 및 최초 충전"
                 : action.kind === "credit"
                   ? "충전하기"
-                  : "차감하기"}
+                  : action.kind === "reversal"
+                    ? "거래 취소 확정"
+                    : "차감하기"}
         </button>
       </form>
     </Dialog>
@@ -299,11 +324,15 @@ function History({
   actorId,
   customer,
   onClose,
+  onReverse,
+  onManage,
 }: {
   token: string;
   actorId: string;
   customer: Customer;
   onClose: () => void;
+  onReverse: (entry: Transaction) => void;
+  onManage: (kind: "rename" | "single") => void;
 }) {
   const history = useInfiniteQuery({
     queryKey: ["ledger", actorId, customer.id],
@@ -334,6 +363,20 @@ function History({
           <span>{customer.name}</span>
           <strong>{money(customer.balance)}</strong>
         </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            className="button button-outline"
+            onClick={() => onManage("rename")}
+          >
+            이름 수정
+          </button>
+          <button
+            className="button button-outline"
+            onClick={() => onManage("single")}
+          >
+            고객 삭제
+          </button>
+        </div>
         {history.isPending && (
           <p role="status" className="state">
             거래 내역을 불러오는 중…
@@ -347,7 +390,7 @@ function History({
         )}
         <ol className="history-list">
           {entries.map((entry) => (
-            <li key={entry.id}>
+            <li key={entry.id} id={"transaction-" + entry.id}>
               <div>
                 <strong>
                   {labels[entry.kind]}
@@ -356,6 +399,16 @@ function History({
                 <time dateTime={entry.createdAt}>
                   {fullDate.format(new Date(entry.createdAt))}
                 </time>
+                {entry.memo && (
+                  <small className="wrap-anywhere">{entry.memo}</small>
+                )}
+                {entry.reversesId && (
+                  <small>원거래 {entry.reversesId.slice(0, 8)}</small>
+                )}
+                {entry.reversedById && (
+                  <small>취소 거래 {entry.reversedById.slice(0, 8)}</small>
+                )}
+                <small>거래 번호 {entry.id.slice(0, 8)}</small>
               </div>
               <div>
                 <strong className={entry.amount > 0 ? "text-primary" : ""}>
@@ -366,6 +419,14 @@ function History({
                     ? "거래 후 잔액 기록 없음"
                     : "거래 후 " + money(entry.balanceAfter)}
                 </small>
+                {entry.kind !== "reversal" && !entry.reversedById && (
+                  <button
+                    className="button button-outline"
+                    onClick={() => onReverse(entry)}
+                  >
+                    거래 취소
+                  </button>
+                )}
               </div>
             </li>
           ))}
@@ -397,6 +458,139 @@ function Problem({ error, retry }: { error: unknown; retry: () => void }) {
   );
 }
 
+type Management =
+  | { kind: "rename"; customer: Customer }
+  | { kind: "single"; customer: Customer }
+  | { kind: "bulk"; ids: string[] }
+  | { kind: "all"; count: number };
+
+function ManagementDialog({
+  action,
+  token,
+  onClose,
+  onSuccess,
+}: {
+  action: Management;
+  token: string;
+  onClose: () => void;
+  onSuccess: (message: string) => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const active = useRef(false);
+  const title = {
+    rename: "고객 이름 수정",
+    single: "고객 삭제",
+    bulk: "선택 고객 삭제",
+    all: "전체 고객 삭제",
+  }[action.kind];
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (active.current) return;
+    const form = new FormData(event.currentTarget);
+    active.current = true;
+    setPending(true);
+    setError("");
+    try {
+      if (action.kind === "rename") {
+        await api(token, "/customers/" + action.customer.id, {
+          method: "PATCH",
+          body: { name: String(form.get("name")) },
+        });
+        onSuccess("고객 이름을 수정했습니다.");
+        return;
+      }
+      let result: { deletedCount: number };
+      switch (action.kind) {
+        case "single":
+          result = await api(token, "/customers/" + action.customer.id, {
+            method: "DELETE",
+          });
+          break;
+        case "bulk":
+          result = await api(token, "/customers/bulk-delete", {
+            body: { customerIds: action.ids },
+          });
+          break;
+        case "all":
+          result = await api(token, "/customers/delete-all", {
+            body: {
+              expectedCount: action.count,
+              confirmation: String(form.get("confirmation")),
+              pin: String(form.get("pin")),
+            },
+          });
+          break;
+      }
+      onSuccess(result.deletedCount + "명의 고객을 삭제했습니다.");
+    } catch (error) {
+      setError(messageFor(error));
+    } finally {
+      active.current = false;
+      setPending(false);
+    }
+  }
+  return (
+    <Dialog title={title} onClose={onClose} busy={pending}>
+      <form className="sheet-body grid gap-4" onSubmit={submit}>
+        {action.kind === "rename" ? (
+          <label>
+            고객 이름
+            <input
+              name="name"
+              defaultValue={action.customer.name}
+              maxLength={120}
+              required
+            />
+          </label>
+        ) : (
+          <>
+            <p>
+              {action.kind === "single"
+                ? action.customer.name
+                : (action.kind === "all" ? action.count : action.ids.length) +
+                  "명"}
+              을 활성 목록에서 삭제합니다. 잔액과 거래 내역은 보존됩니다.
+            </p>
+            {action.kind === "all" && (
+              <>
+                <label>
+                  확인 문구 “전체 삭제”
+                  <input name="confirmation" autoComplete="off" required />
+                </label>
+                <label>
+                  관리자 PIN (숫자 6자리)
+                  <input
+                    type="password"
+                    name="pin"
+                    inputMode="numeric"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+              </>
+            )}
+          </>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <button className="button primary" disabled={pending}>
+          {pending
+            ? "처리 중…"
+            : action.kind === "rename"
+              ? "저장"
+              : "삭제 확정"}
+        </button>
+      </form>
+    </Dialog>
+  );
+}
+
 export function Counter({
   token,
   actorId,
@@ -409,6 +603,9 @@ export function Counter({
   const [search, setSearch] = useState("");
   const [action, setAction] = useState<Action | null>(null);
   const [history, setHistory] = useState<Customer | null>(null);
+  const [management, setManagement] = useState<Management | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [signOutError, setSignOutError] = useState("");
   const cache = useQueryClient();
@@ -441,6 +638,12 @@ export function Counter({
     ...new Map(customers.map((customer) => [customer.id, customer])).values(),
   ];
 
+  function invalidateLedger() {
+    void cache.invalidateQueries({ queryKey: ["customers", actorId] });
+    void cache.invalidateQueries({ queryKey: ["summary", actorId] });
+    void cache.invalidateQueries({ queryKey: ["ledger", actorId] });
+  }
+
   function completed(result: Result) {
     setAction(null);
     setNotice(
@@ -453,9 +656,11 @@ export function Counter({
         money(result.customer.balance),
     );
     if (action?.kind === "register") setSearch(result.customer.name);
-    void cache.invalidateQueries({ queryKey: ["customers", actorId] });
-    void cache.invalidateQueries({ queryKey: ["summary", actorId] });
-    void cache.invalidateQueries({ queryKey: ["ledger", actorId] });
+    if (action?.kind === "reversal")
+      setHistory((open) =>
+        open ? { ...open, balance: result.customer.balance } : open,
+      );
+    invalidateLedger();
   }
 
   return (
@@ -527,6 +732,40 @@ export function Counter({
         <section aria-labelledby="customers-title">
           <div className="section-heading">
             <h1 id="customers-title">고객 장부</h1>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                className="button button-outline"
+                onClick={() => {
+                  setSelecting(!selecting);
+                  setSelected([]);
+                }}
+              >
+                {selecting ? "선택 종료" : "고객 선택"}
+              </button>
+              {selecting && (
+                <button
+                  className="button button-outline"
+                  disabled={!selected.length}
+                  onClick={() => setManagement({ kind: "bulk", ids: selected })}
+                >
+                  선택 삭제 ({selected.length}/100)
+                </button>
+              )}
+              {selecting && summary.data && (
+                <button
+                  className="button button-outline"
+                  disabled={summary.data.customerCount === "0"}
+                  onClick={() =>
+                    setManagement({
+                      kind: "all",
+                      count: Number(summary.data!.customerCount),
+                    })
+                  }
+                >
+                  전체 삭제
+                </button>
+              )}
+            </div>
           </div>
           <div className="toolbar flex flex-wrap gap-2">
             <label className="search">
@@ -569,6 +808,27 @@ export function Counter({
           <ul className="cards grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {activeCustomers.map((customer) => (
               <li key={customer.id} className="card">
+                {selecting && (
+                  <label className="flex min-h-11 items-center gap-2">
+                    <input
+                      className="size-5 min-h-0"
+                      type="checkbox"
+                      checked={selected.includes(customer.id)}
+                      disabled={
+                        selected.length === 100 &&
+                        !selected.includes(customer.id)
+                      }
+                      onChange={(event) =>
+                        setSelected(
+                          event.target.checked
+                            ? [...selected, customer.id]
+                            : selected.filter((id) => id !== customer.id),
+                        )
+                      }
+                    />{" "}
+                    {customer.name} 선택
+                  </label>
+                )}
                 <div className="card-heading">
                   <h2>{customer.name}</h2>
                   <button
@@ -634,6 +894,21 @@ export function Counter({
           )}
         </section>
       </main>
+      {management && (
+        <ManagementDialog
+          action={management}
+          token={token}
+          onClose={() => setManagement(null)}
+          onSuccess={(message) => {
+            setManagement(null);
+            setHistory(null);
+            setSelected([]);
+            setSelecting(false);
+            setNotice(message);
+            invalidateLedger();
+          }}
+        />
+      )}
       {action && (
         <AmountDialog
           action={action}
@@ -643,12 +918,16 @@ export function Counter({
           onSuccess={completed}
         />
       )}
-      {history && (
+      {history && !action && !management && (
         <History
           token={token}
           actorId={actorId}
           customer={history}
           onClose={() => setHistory(null)}
+          onReverse={(entry) =>
+            setAction({ kind: "reversal", customer: history, entry })
+          }
+          onManage={(kind) => setManagement({ kind, customer: history })}
         />
       )}
     </div>

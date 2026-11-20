@@ -1,8 +1,21 @@
 import type { RequestHandler } from "express";
 
+export const isPin = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9]{6}$/.test(value);
+
+export class PinLimitError extends Error {
+  constructor(public retryMs: number) {
+    super("PIN attempts exhausted");
+  }
+}
+
 export interface AdminAuth {
+  signInWithPin?(
+    pin: string,
+  ): Promise<{ access_token: string; refresh_token: string } | null>;
   getUserId(token: string): Promise<string | null>;
   isAdmin(userId: string): Promise<boolean>;
+  reauthenticate?(token: string, userId: string, pin: string): Promise<boolean>;
 }
 
 export function requireAdmin(auth?: AdminAuth): RequestHandler {

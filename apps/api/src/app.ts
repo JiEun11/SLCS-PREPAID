@@ -2,7 +2,12 @@ import express from "express";
 import swaggerUi from "swagger-ui-express";
 import { createCustomerRouter, type CustomerService } from "./customers.js";
 import { customerPaths } from "./customer-openapi.js";
-import { requireAdmin, type AdminAuth } from "./admin-auth.js";
+import {
+  isPin,
+  PinLimitError,
+  requireAdmin,
+  type AdminAuth,
+} from "./admin-auth.js";
 
 const healthPath = "/api/health";
 const adminPath = "/api/admin/me";
@@ -57,6 +62,39 @@ export function createApp(
   const app = express();
   app.disable("x-powered-by");
   app.get(healthPath, (_request, response) => response.json({ status: "ok" }));
+
+  app.post(
+    "/api/admin/pin",
+    express.json({ limit: "1kb" }),
+    async (request, response) => {
+      response.set("Cache-Control", "no-store");
+      if (!isPin(request.body?.pin)) {
+        response.status(400).json({ error: "invalid_request" });
+        return;
+      }
+      if (!adminAuth?.signInWithPin) {
+        response.status(503).json({ error: "authentication_unavailable" });
+        return;
+      }
+      try {
+        const session = await adminAuth.signInWithPin(request.body.pin);
+        if (!session) {
+          response.status(401).json({ error: "invalid_pin" });
+          return;
+        }
+        response.json(session);
+      } catch (error) {
+        if (error instanceof PinLimitError) {
+          response
+            .set("Retry-After", String(Math.ceil(error.retryMs / 1000)))
+            .status(429)
+            .json({ error: "pin_rate_limited" });
+          return;
+        }
+        response.status(503).json({ error: "authentication_unavailable" });
+      }
+    },
+  );
 
   app.get(adminPath, requireAdmin(adminAuth), (_request, response) =>
     response.json({ role: "admin" }),
