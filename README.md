@@ -61,7 +61,7 @@ Supabase Auth 계정 하나와 해당 계정의 admins 등록이 필요합니다
 브라우저에서 http://localhost:5173을 열고 로그인합니다. 로컬 개발에서는
 Vite가 API를 프록시합니다. 배포 환경에서는 웹과 /api가 동일한 HTTPS
 출처에서 제공되도록 라우팅하고, 웹 빌드 시 VITE 값을 전달합니다.
-Phase 3 API에는 0001_phase3_registration과 0002_transaction_memo가 적용된 DB와
+Phase 3 API에는 0001_phase3_registration이 적용된 DB와
 신규 테이블에 접근할 수 있는 API 역할이 필요합니다.
 
 카운터 요약의 고객 수와 전체 잔액은 활성 고객 기준입니다. 누적 사용액은

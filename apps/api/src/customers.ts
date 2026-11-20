@@ -32,18 +32,11 @@ const nameSchema = z
   .min(1)
   .max(120)
   .refine((name) => !name.includes("\0"));
-const memoSchema = z
-  .string()
-  .trim()
-  .max(300)
-  .refine((memo) => !memo.includes("\0"))
-  .optional();
 export const movementSchema = z.strictObject({
   amount: positiveMoney,
-  memo: memoSchema,
 });
 export const renameSchema = z.strictObject({ name: nameSchema });
-export const reversalInputSchema = z.strictObject({ memo: memoSchema });
+export const reversalInputSchema = z.strictObject({});
 export const bulkDeleteSchema = z.strictObject({
   customerIds: z.array(z.uuid()).min(1).max(100),
 });
@@ -55,7 +48,6 @@ export const deleteAllSchema = z.strictObject({
 export const registrationSchema = z.strictObject({
   name: nameSchema,
   initialAmount: positiveMoney,
-  memo: memoSchema,
 });
 export const keySchema = z.string().regex(/^[!-+\x2D-~]{1,128}$/);
 export const customerIdSchema = z.uuid();
@@ -111,7 +103,6 @@ export const transactionSchema = movementTransactionSchema.extend({
   kind: z.enum(["credit", "debit", "reversal"]),
   balanceAfter: z.number().int().nonnegative().nullable(),
   actorId: z.uuid(),
-  memo: z.string().nullable(),
   reversesId: z.uuid().nullable(),
   reversedById: z.uuid().nullable(),
 });
@@ -217,7 +208,6 @@ const entryFields = {
   amount: transactions.amount,
   balanceAfter: transactions.balanceAfter,
   actorId: transactions.actorId,
-  memo: transactions.memo,
   createdAt: transactions.createdAt,
   reversesId: transactions.reversesId,
 };
@@ -228,29 +218,19 @@ function entryResponse(
     amount: number;
     balanceAfter: number | null;
     actorId: string;
-    memo: string | null;
     createdAt: Date;
     reversesId: string | null;
   },
   reversedById: string | null,
 ) {
-  const {
-    id,
-    kind,
-    amount,
-    balanceAfter,
-    actorId,
-    memo,
-    createdAt,
-    reversesId,
-  } = entry;
+  const { id, kind, amount, balanceAfter, actorId, createdAt, reversesId } =
+    entry;
   return {
     id,
     kind,
     amount,
     balanceAfter,
     actorId,
-    memo,
     createdAt: createdAt.toISOString(),
     reversesId,
     reversedById,
@@ -271,12 +251,7 @@ export function createCustomerService<T extends PgQueryResultHKT>(
         db,
         actorId,
         key,
-        [
-          "register-customer",
-          input.name,
-          input.initialAmount,
-          ...(input.memo ? [input.memo] : []),
-        ],
+        ["register-customer", input.name, input.initialAmount],
         registrationResponseSchema,
         async (tx) => {
           const [customer] = await tx
@@ -289,7 +264,6 @@ export function createCustomerService<T extends PgQueryResultHKT>(
             kind: "credit",
             amount: input.initialAmount,
             balanceAfter: customer.balance,
-            memo: input.memo || null,
             idempotencyKey: key,
           });
           return {
@@ -311,13 +285,12 @@ export function createCustomerService<T extends PgQueryResultHKT>(
       customerId: string,
       kind: "credit" | "debit" | "reversal",
       target: number | string,
-      memo?: string,
     ) {
       return idempotent(
         db,
         actorId,
         key,
-        [kind, customerId, target, ...(memo ? [memo] : [])],
+        [kind, customerId, target],
         movementResponseSchema,
         async (tx) => {
           const [customer] = await tx
@@ -366,7 +339,6 @@ export function createCustomerService<T extends PgQueryResultHKT>(
             kind,
             amount: signedAmount,
             balanceAfter: balance,
-            memo: memo || null,
             reversesId,
             idempotencyKey: key,
           });
@@ -576,7 +548,6 @@ export function createCustomerRouter(
           id.data.toLowerCase(),
           kind,
           input.data.amount,
-          input.data.memo,
         );
         response.status(201).json(result);
       },
@@ -609,7 +580,6 @@ export function createCustomerRouter(
             customer.data.toLowerCase(),
             "reversal",
             target.data.toLowerCase(),
-            input.data.memo,
           ),
         );
     },

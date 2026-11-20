@@ -181,12 +181,11 @@ function AmountDialog({
           : action.kind === "reversal"
             ? "/transactions/" + action.entry.id + "/reversal"
             : "/debits");
-    const memo = String(form.get("memo") ?? "").trim() || undefined;
     const body = register
-      ? { name, initialAmount: amount, memo }
+      ? { name, initialAmount: amount }
       : action.kind === "reversal"
-        ? { memo }
-        : { amount, memo };
+        ? {}
+        : { amount };
     const signature = JSON.stringify([actorId, path, body]);
     const storageKey = "slcs:pending:" + signature;
     let key: string;
@@ -292,10 +291,6 @@ function AmountDialog({
             </span>
           </label>
         )}
-        <label>
-          메모 (선택)
-          <input name="memo" maxLength={300} readOnly={pending || uncertain} />
-        </label>
         {error && (
           <p className="error" role="alert">
             {error}
@@ -399,9 +394,6 @@ function History({
                 <time dateTime={entry.createdAt}>
                   {fullDate.format(new Date(entry.createdAt))}
                 </time>
-                {entry.memo && (
-                  <small className="wrap-anywhere">{entry.memo}</small>
-                )}
                 {entry.reversesId && (
                   <small>원거래 {entry.reversesId.slice(0, 8)}</small>
                 )}

@@ -11,7 +11,6 @@ export type Transaction = {
   balanceAfter: number | null;
   createdAt: string;
   actorId?: string;
-  memo?: string | null;
   reversesId?: string | null;
   reversedById?: string | null;
 };
