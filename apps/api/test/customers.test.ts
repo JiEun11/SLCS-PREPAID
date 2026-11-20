@@ -166,4 +166,40 @@ describe("customer API", () => {
     await get(path + "/" + deleted.id).expect(404);
     await get(path + "/invalid").expect(400);
   });
+  it("registers same-name customers and searches exact phone suffixes including leading zero", async () => {
+    const first = await register("one")
+      .send({ name: "김민지", initialAmount: 1000, phoneLast4: "0123" })
+      .expect(201);
+    const second = await register("two")
+      .send({ name: "김민지", initialAmount: 2000, phoneLast4: "0456" })
+      .expect(201);
+    await register("two")
+      .send({ name: "김민지", initialAmount: 2000, phoneLast4: "0456" })
+      .expect(201, second.body);
+    await register("two")
+      .send({ name: "김민지", initialAmount: 2000, phoneLast4: "0457" })
+      .expect(409);
+    await register("bad")
+      .send({ name: "김민지", initialAmount: 1000, phoneLast4: "01012345678" })
+      .expect(400);
+    const byName = await get(path).query({ q: "민지" }).expect(200);
+    expect(
+      byName.body.customers.map(({ id }: { id: string }) => id).sort(),
+    ).toEqual([first.body.customer.id, second.body.customer.id].sort());
+    await get(path)
+      .query({ q: "0123" })
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.customers).toMatchObject([
+          { id: first.body.customer.id, phoneLast4: "0123" },
+        ]);
+      });
+    await get(path).query({ q: "012" }).expect(200, { customers: [] });
+    await api
+      .patch(path + "/" + first.body.customer.id)
+      .auth("admin", { type: "bearer" })
+      .send({ name: "김민지", phoneLast4: null })
+      .expect(200);
+    await get(path).query({ q: "0123" }).expect(200, { customers: [] });
+  });
 });

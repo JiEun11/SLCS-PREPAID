@@ -35,7 +35,11 @@ const nameSchema = z
 export const movementSchema = z.strictObject({
   amount: positiveMoney,
 });
-export const renameSchema = z.strictObject({ name: nameSchema });
+const phoneLast4Schema = z.string().regex(/^[0-9]{4}$/);
+export const renameSchema = z.strictObject({
+  name: nameSchema,
+  phoneLast4: phoneLast4Schema.nullable().optional(),
+});
 export const reversalInputSchema = z.strictObject({});
 export const bulkDeleteSchema = z.strictObject({
   customerIds: z.array(z.uuid()).min(1).max(100),
@@ -48,6 +52,7 @@ export const deleteAllSchema = z.strictObject({
 export const registrationSchema = z.strictObject({
   name: nameSchema,
   initialAmount: positiveMoney,
+  phoneLast4: phoneLast4Schema.optional(),
 });
 export const keySchema = z.string().regex(/^[!-+\x2D-~]{1,128}$/);
 export const customerIdSchema = z.uuid();
@@ -64,6 +69,7 @@ const listSchema = z.strictObject({
 export const customerSchema = z.object({
   id: z.uuid(),
   name: z.string(),
+  phoneLast4: phoneLast4Schema.nullable().default(null),
   balance: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
 });
@@ -81,10 +87,11 @@ export const registrationResponseSchema = z.object({
 function customerResponse({
   id,
   name,
+  phoneLast4,
   balance,
   createdAt,
 }: typeof customers.$inferSelect) {
-  return { id, name, balance, createdAt: createdAt.toISOString() };
+  return { id, name, phoneLast4, balance, createdAt: createdAt.toISOString() };
 }
 
 const movementTransactionSchema = z.object({
@@ -251,12 +258,21 @@ export function createCustomerService<T extends PgQueryResultHKT>(
         db,
         actorId,
         key,
-        ["register-customer", input.name, input.initialAmount],
+        [
+          "register-customer",
+          input.name,
+          input.initialAmount,
+          ...(input.phoneLast4 ? [input.phoneLast4] : []),
+        ],
         registrationResponseSchema,
         async (tx) => {
           const [customer] = await tx
             .insert(customers)
-            .values({ name: input.name, balance: input.initialAmount })
+            .values({
+              name: input.name,
+              phoneLast4: input.phoneLast4,
+              balance: input.initialAmount,
+            })
             .returning();
           const charge = await record(tx, {
             customerId: customer.id,
@@ -356,10 +372,10 @@ export function createCustomerService<T extends PgQueryResultHKT>(
       );
     },
 
-    async rename(id: string, name: string) {
+    async rename(id: string, input: z.infer<typeof renameSchema>) {
       const [customer] = await db
         .update(customers)
-        .set({ name })
+        .set(input)
         .where(and(eq(customers.id, id), isNull(customers.deletedAt)))
         .returning();
       if (!customer) throw new CustomerError(404, "customer_not_found");
@@ -446,9 +462,11 @@ export function createCustomerService<T extends PgQueryResultHKT>(
         .where(
           and(
             isNull(customers.deletedAt),
-            pattern
-              ? sql`${customers.name} ilike ${"%" + pattern + "%"} escape '!'`
-              : undefined,
+            q && phoneLast4Schema.safeParse(q).success
+              ? eq(customers.phoneLast4, q)
+              : pattern
+                ? sql`(${customers.name} ilike ${"%" + pattern + "%"} escape '!' or ${customers.id}::text ilike ${pattern + "%"} escape '!')`
+                : undefined,
           ),
         )
         .orderBy(asc(customers.createdAt), asc(customers.id))
@@ -493,7 +511,14 @@ export function createCustomerRouter(
     const input = registrationSchema.safeParse(request.body);
     const key = keySchema.safeParse(request.get("Idempotency-Key"));
     if (!input.success || !key.success) {
-      response.status(400).json({ error: "invalid_request" });
+      const invalidPhone =
+        !input.success &&
+        input.error.issues.some((issue) => issue.path[0] === "phoneLast4");
+      response
+        .status(400)
+        .json({
+          error: invalidPhone ? "invalid_phone_last4" : "invalid_request",
+        });
       return;
     }
     const result = await service.register(
@@ -592,7 +617,7 @@ export function createCustomerRouter(
       response.status(400).json({ error: "invalid_request" });
       return;
     }
-    response.json(await service.rename(customer.data, input.data.name));
+    response.json(await service.rename(customer.data, input.data));
   });
 
   router.delete("/:customerId", async (request, response) => {

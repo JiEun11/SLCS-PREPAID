@@ -18,6 +18,7 @@ export type Transaction = {
 export type Customer = {
   id: string;
   name: string;
+  phoneLast4: string | null;
   balance: number;
   createdAt: string;
   recentTransaction: Transaction | null;
@@ -56,6 +57,7 @@ const errors: Record<string, string> = {
   reauthentication_failed: "관리자 PIN을 확인해 주세요.",
   customer_count_changed:
     "고객 수가 바뀌었습니다. 창을 닫고 다시 확인해 주세요.",
+  invalid_phone_last4: "휴대폰 번호는 뒷자리 숫자 4개만 입력해 주세요.",
   invalid_request: "입력값을 확인해 주세요.",
 };
 

@@ -47,6 +47,44 @@ function money(amount: number | string) {
   );
 }
 
+function CustomerIdentity({ customer }: { customer: Customer }) {
+  return (
+    <span className="min-w-0 wrap-anywhere">
+      {customer.name}
+      {customer.phoneLast4 && (
+        <small className="ml-2 inline-block whitespace-nowrap text-xs font-medium tabular-nums text-muted-foreground">
+          · {customer.phoneLast4}
+        </small>
+      )}
+    </span>
+  );
+}
+
+function PhoneLast4Field({
+  initial,
+  readOnly,
+}: {
+  initial?: string | null;
+  readOnly?: boolean;
+}) {
+  return (
+    <label>
+      휴대폰 뒷자리 4자리 (선택)
+      <input
+        name="phoneLast4"
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]{4}"
+        maxLength={4}
+        autoComplete="off"
+        defaultValue={initial ?? ""}
+        readOnly={readOnly}
+        placeholder="예: 0123"
+      />
+    </label>
+  );
+}
+
 function signed(amount: number) {
   return (amount > 0 ? "+" : "−") + money(Math.abs(amount));
 }
@@ -105,6 +143,17 @@ function Dialog({
       ref={ref}
       className={"sheet " + (side ? "history-sheet" : "")}
       aria-labelledby="dialog-title"
+      onClick={(event) => {
+        if (!side || busy || event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (
+          event.clientX < bounds.left ||
+          event.clientX >= bounds.right ||
+          event.clientY < bounds.top ||
+          event.clientY >= bounds.bottom
+        )
+          onClose();
+      }}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) onClose();
@@ -182,7 +231,13 @@ function AmountDialog({
             ? "/transactions/" + action.entry.id + "/reversal"
             : "/debits");
     const body = register
-      ? { name, initialAmount: amount }
+      ? {
+          name,
+          initialAmount: amount,
+          ...(form.get("phoneLast4")
+            ? { phoneLast4: String(form.get("phoneLast4")) }
+            : {}),
+        }
       : action.kind === "reversal"
         ? {}
         : { amount };
@@ -246,22 +301,26 @@ function AmountDialog({
       <form className="sheet-body grid gap-4" onSubmit={submit}>
         {register ? (
           <label>
-            고객 이름
+            고객 표시 이름
             <input
               name="name"
               autoComplete="off"
               maxLength={120}
-              placeholder="고객 이름 입력"
+              placeholder="예: 김민지 · 별칭"
               required
               readOnly={pending || uncertain}
             />
+            <small className="font-normal text-muted-foreground">
+              이름과 휴대폰 뒷자리가 모두 같으면 이름 뒤에 별칭을 붙여 주세요.
+            </small>
           </label>
         ) : (
           <div className="balance-preview">
-            <span>{action.customer.name}</span>
+            <CustomerIdentity customer={action.customer} />
             <strong>{money(action.customer.balance)}</strong>
           </div>
         )}
+        {register && <PhoneLast4Field readOnly={pending || uncertain} />}
         {action.kind === "reversal" ? (
           <p>
             이 거래를 취소하면 잔액에 {signed(-action.entry.amount)}이
@@ -277,12 +336,14 @@ function AmountDialog({
             <span className="amount-field">
               <input
                 name="amount"
-                value={entered}
-                onChange={(event) => setEntered(event.target.value)}
+                value={entered.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                onChange={(event) =>
+                  setEntered(
+                    event.target.value.replace(/[^0-9]/g, "").slice(0, 10),
+                  )
+                }
                 type="text"
                 inputMode="numeric"
-                pattern="[0-9]+"
-                maxLength={10}
                 placeholder="0"
                 required
                 readOnly={pending || uncertain}
@@ -355,7 +416,7 @@ function History({
     <Dialog title="거래 내역" onClose={onClose} side>
       <div className="sheet-body">
         <div className="balance-preview">
-          <span>{customer.name}</span>
+          <CustomerIdentity customer={customer} />
           <strong>{money(customer.balance)}</strong>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
@@ -471,7 +532,7 @@ function ManagementDialog({
   const [error, setError] = useState("");
   const active = useRef(false);
   const title = {
-    rename: "고객 이름 수정",
+    rename: "고객 정보 수정",
     single: "고객 삭제",
     bulk: "선택 고객 삭제",
     all: "전체 고객 삭제",
@@ -487,9 +548,12 @@ function ManagementDialog({
       if (action.kind === "rename") {
         await api(token, "/customers/" + action.customer.id, {
           method: "PATCH",
-          body: { name: String(form.get("name")) },
+          body: {
+            name: String(form.get("name")),
+            phoneLast4: String(form.get("phoneLast4") ?? "") || null,
+          },
         });
-        onSuccess("고객 이름을 수정했습니다.");
+        onSuccess("고객 정보를 수정했습니다.");
         return;
       }
       let result: { deletedCount: number };
@@ -526,15 +590,24 @@ function ManagementDialog({
     <Dialog title={title} onClose={onClose} busy={pending}>
       <form className="sheet-body grid gap-4" onSubmit={submit}>
         {action.kind === "rename" ? (
-          <label>
-            고객 이름
-            <input
-              name="name"
-              defaultValue={action.customer.name}
-              maxLength={120}
-              required
+          <>
+            <label>
+              고객 표시 이름
+              <input
+                name="name"
+                defaultValue={action.customer.name}
+                maxLength={120}
+                required
+              />
+              <small className="font-normal text-muted-foreground">
+                이름과 휴대폰 뒷자리가 모두 같으면 이름 뒤에 별칭을 붙여 주세요.
+              </small>
+            </label>
+            <PhoneLast4Field
+              initial={action.customer.phoneLast4}
+              readOnly={pending}
             />
-          </label>
+          </>
         ) : (
           <>
             <p>
@@ -583,6 +656,43 @@ function ManagementDialog({
   );
 }
 
+export function customerListOptions(token: string, actorId: string, q: string) {
+  return {
+    queryKey: ["customers", actorId, q],
+    initialPageParam: 0,
+    queryFn: ({
+      pageParam,
+      signal,
+    }: {
+      pageParam: number;
+      signal: AbortSignal;
+    }) => {
+      const params = new URLSearchParams({
+        q,
+        limit: String(pageSize),
+        offset: String(pageParam),
+      });
+      return api<{ customers: Customer[] }>(token, "/customers?" + params, {
+        signal,
+      });
+    },
+    getNextPageParam: (last: { customers: Customer[] }, pages: unknown[]) =>
+      last.customers.length === pageSize ? pages.length * pageSize : undefined,
+    staleTime: 10_000,
+    retry: false as const,
+  };
+}
+
+export function summaryOptions(token: string, actorId: string) {
+  return {
+    queryKey: ["summary", actorId],
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      api<Summary>(token, "/customers/summary", { signal }),
+    staleTime: 10_000,
+    retry: false as const,
+  };
+}
+
 export function Counter({
   token,
   actorId,
@@ -601,30 +711,13 @@ export function Counter({
   const [notice, setNotice] = useState("");
   const [signOutError, setSignOutError] = useState("");
   const cache = useQueryClient();
-  const q = search.trim();
-  const summary = useQuery({
-    queryKey: ["summary", actorId],
-    queryFn: ({ signal }) =>
-      api<Summary>(token, "/customers/summary", { signal }),
-    retry: false,
-  });
-  const list = useInfiniteQuery({
-    queryKey: ["customers", actorId, q],
-    initialPageParam: 0,
-    queryFn: ({ pageParam, signal }) => {
-      const params = new URLSearchParams({
-        q,
-        limit: String(pageSize),
-        offset: String(pageParam),
-      });
-      return api<{ customers: Customer[] }>(token, "/customers?" + params, {
-        signal,
-      });
-    },
-    getNextPageParam: (last, pages) =>
-      last.customers.length === pageSize ? pages.length * pageSize : undefined,
-    retry: false,
-  });
+  const [q, setQuery] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  const summary = useQuery(summaryOptions(token, actorId));
+  const list = useInfiniteQuery(customerListOptions(token, actorId, q));
   const customers = list.data?.pages.flatMap((page) => page.customers) ?? [];
   const activeCustomers = [
     ...new Map(customers.map((customer) => [customer.id, customer])).values(),
@@ -762,11 +855,11 @@ export function Counter({
           <div className="toolbar flex flex-wrap gap-2">
             <label className="search">
               <span className="search-icon" aria-hidden="true" />
-              <span className="sr-only">고객 이름 검색</span>
+              <span className="sr-only">고객 이름 또는 휴대폰 뒷자리 검색</span>
               <input
                 type="search"
                 maxLength={120}
-                placeholder="고객 이름 검색"
+                placeholder="고객 이름 또는 휴대폰 뒷자리 검색"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -822,11 +915,19 @@ export function Counter({
                   </label>
                 )}
                 <div className="card-heading">
-                  <h2>{customer.name}</h2>
+                  <h2>
+                    <CustomerIdentity customer={customer} />
+                  </h2>
                   <button
                     className="button history-button"
                     onClick={() => setHistory(customer)}
-                    aria-label={customer.name + " 거래 내역"}
+                    aria-label={[
+                      customer.name,
+                      customer.phoneLast4,
+                      "거래 내역",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                   >
                     거래 내역 <span aria-hidden="true">›</span>
                   </button>
@@ -857,7 +958,9 @@ export function Counter({
                       setNotice("");
                       setAction({ kind: "credit", customer });
                     }}
-                    aria-label={customer.name + " 충전"}
+                    aria-label={[customer.name, customer.phoneLast4, "충전"]
+                      .filter(Boolean)
+                      .join(" ")}
                   >
                     ＋ 충전
                   </button>
@@ -867,7 +970,9 @@ export function Counter({
                       setNotice("");
                       setAction({ kind: "debit", customer });
                     }}
-                    aria-label={customer.name + " 사용"}
+                    aria-label={[customer.name, customer.phoneLast4, "사용"]
+                      .filter(Boolean)
+                      .join(" ")}
                   >
                     − 사용
                   </button>
